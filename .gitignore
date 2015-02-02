@@ -1,0 +1,4 @@
+*.pyc
+build/
+dist/
+chroot.egg-info/
