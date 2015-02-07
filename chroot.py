@@ -41,6 +41,7 @@ import python_essentials.lib.mount_utils as mount_utils
 import subprocess as sp
 import sys
 import shutil
+import shelve
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -76,7 +77,9 @@ __docstring_debug__ = "Turn of debugging messages printed to stdout"
 )
 def chroot(base_dir, shell=shell_default, config_dir_path=config_dir_path_default, host_type=host_type_default, mount=mount_default, mount_nullfs=mount_nullfs_default, kldload=kldload_default, chroot=chroot_default, debug=False):
     """Performs the necessary preparations for starting the chroot located in `base_dir` if and only if the script is invoked the first time with the value of `base_dir` and `host_type`, starts the chroot for `base_dir` and stores a reference (in form of `base_dir`, `host_type` and the pid of the chroot shell) in a line in the file denoted by `count_file_path`. Creates the file denoted by `count_file_path` if it doesn't exist. `host_type` allows to leave some fundamental differences between hosts to the script. `base_dir` must not contain %s. It is possible to manage different host types for the same base directory (that might make sense one day or maybe even already). The chroot (shell) runs in foreground and the script can be invoked multiple times.""" % (count_file_separator, )
-    # it's more elegant to let the use only determine one of configuration directory and count file and due to the the fact that count file is in configuration directory it is better to let him_her choose the configuration directory. The configuration directory can't be static because that get's us in trouble whit sudo and read-only roots (e.g. in FreeBSD jails).
+    # internal implementation notes:
+    # - it's more elegant to let the use only determine one of configuration directory and count file and due to the the fact that count file is in configuration directory it is better to let him_her choose the configuration directory. The configuration directory can't be static because that get's us in trouble whit sudo and read-only roots (e.g. in FreeBSD jails).
+    # - entries need to be removable from count file; either the count file is not human readable (in that case shelve can be used which is as easy as it can get) or it is (in that case either writing simple lines with a separator (makes deletions hard/implementation overhead) or using an XML serialization (programming overhead) would be the ways to go) -> use shelve
     if debug is True:
         logger.info("turning on debugging messages")
         logger.setLevel(logging.DEBUG)
@@ -111,9 +114,15 @@ def chroot(base_dir, shell=shell_default, config_dir_path=config_dir_path_defaul
         chroot_start(base_dir=base_dir, host_type=host_type, mount=mount)
     chroot_process = sp.Popen([chroot, base_dir, shell])
     pid = chroot_process.pid
-    with open(count_file_path, "w") as count_file:
-        count_file_entry = "%s%s%s%s%s" % (base_dir, count_file_separator, pid, count_file_separator, host_type, )
-        count_file.write("%s\n" % (count_file_entry, ))
+    count_file_dict = shelve.open(count_file_path)
+    if not base_dir in count_file_dict:
+        count_file_dict[base_dir]= dict()
+    base_dir_dict = count_file_dict[base_dir]
+    if not host_type in base_dir_dict:
+        base_dir_dict[host_type] = set()
+    base_dir_dict[host_type].add(pid)
+    base_dir_dict.close()
+    count_file_entry = "%s%s%s%s%s" % (base_dir, count_file_separator, pid, count_file_separator, host_type, )
     logger.debug("adding entry '%s' to count file '%s'" % (count_file_entry, count_file_path, ))     
     chroot_process.wait() 
     if chroot_process.returncode != 0:
@@ -164,22 +173,22 @@ def chroot_shutdown(base_dir=None, host_type=None, config_dir_path=config_dir_pa
     if not os.path.exists(count_file_path):
         logger.info("count file '%s' doesn't exist, canceling shutdown" % (count_file_path, ))
         return 0
-    base_dir_dict = retrieve_pids_dict(count_file_path)
+    base_dir_dict = shelve.open(count_file_path)
     if len(base_dir_dict) == 0:
         logger.info("count file '%s' is empty" % (count_file_path, ))
-    for base_dir0 in base_dir_dict:
+    for base_dir0, base_dir_dict0 in base_dir_dict.items():
         if base_dir != None and base_dir0 != base_dir:
             continue
         proc_mount_target = os.path.join(base_dir0, "proc")
         sys_mount_target = os.path.join(base_dir0, "sys")
         dev_mount_target = os.path.join(base_dir0, "dev")
         devpts_mount_target = os.path.join(base_dir0, "dev/pts")
-        host_type_dict = base_dir_dict[base_dir0]
+        host_type_dict = base_dir_dict0[base_dir0]
         if len(host_type_dict) > 0:            
-            for host_type0 in host_type_dict:
+            for host_type0, pids in host_type_dict.items():
                 if host_type != None and host_type0 != host_type:
                     continue
-                for pid in host_type_dict[host_type0]:
+                for pid in pids:
                     try:
                         os.kill(pid, signal.SIGTERM)
                     except OSError:
@@ -199,23 +208,11 @@ def chroot_shutdown(base_dir=None, host_type=None, config_dir_path=config_dir_pa
                 else:
                     raise ValueError("host_type '%s' not supported (count file '%s' corrupted)" % (host_type0, count_file_path, ))
                 logger.info("umounted chroot mounts for base directory '%s' and host type '%s'" % (base_dir0, host_type0, ))
-
-def retrieve_pids_dict(count_file_path):
-    base_dir_dict = dict()
-    with open(count_file_path, "r") as count_file:
-        for base_dir, pid_str, host_type in [i.strip().split(count_file_separator) for i in count_file.readlines()]:
-            if not base_dir in base_dir_dict:
-                base_dir_dict[base_dir] = dict()
-            host_type_dict = base_dir_dict[base_dir]
-            if not host_type in host_type_dict:
-                host_type_dict[host_type] = []
-            pid = int(pid_str)
-            host_type_dict[host_type].append(pid)
-    return base_dir_dict
+                host_type_dict.pop(host_type0)
 
 def retrieve_pids(base_dir, host_type, count_file_path):
     """Retrieves a list of pids of chroot session currently started for `host_type` or an empty list if no pids are managed for that type."""
-    base_dir_dict = retrieve_pids_dict(count_file_path)
+    base_dir_dict = shelve.open(count_file_path)
     if not base_dir in base_dir_dict:
         return []
     if not host_type in base_dir_dict[base_dir]:
