@@ -40,6 +40,7 @@ import python_essentials.lib
 import python_essentials.lib.mount_utils as mount_utils
 import subprocess as sp
 import sys
+import shutil
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -51,9 +52,8 @@ HOST_TYPE_DEBIAN="debian"
 HOST_TYPE_FREEBSD = "freebsd"
 host_type_default = HOST_TYPE_DEBIAN
 shell_default = "/bin/bash"
-config_dir_path=os.path.join(os.getenv("HOME"), ".%s" % (chroot_globals.app_name, ))
+config_dir_path_default=os.path.join(os.getenv("HOME"), ".%s" % (chroot_globals.app_name, ))
 count_file_name = "chroot_count.dta"
-count_file_path_default=os.path.join(config_dir_path, count_file_name) # has to be a static path in order to keep `chroot_shutdown` parameterless
 mount_default = "mount"
 mount_nullfs_default="mount_nullfs"
 kldload_default = "kldload"
@@ -61,31 +61,55 @@ chroot_default = "chroot"
 count_file_separator = ";"
 umount_default = "umount"
 
+__docstring_config_dir_path__ = "The path where to store the references to started sessions and other configuration files"
+__docstring_debug__ = "Turn of debugging messages printed to stdout"
+
 @plac.annotations(base_dir="The base directory of the chroot", 
+    shell=("The shell to use for the chroot", "option"), 
+    config_dir_path=(__docstring_config_dir_path__, "option"), 
+    host_type=("An identifier for the different types of host which can be managed", "option"), 
+    mount=("The mount binary to use", "option"), 
+    mount_nullfs=("The mount_nullfs binary to use", "option"), 
+    kldload=("The kldload binary to use", "option"), 
+    chroot=("The chroot binary to use", "option"), 
+    debug=(__docstring_debug__, "flag"), 
 )
-def chroot(base_dir, shell=shell_default, count_file_path=count_file_path_default, host_type=host_type_default, mount=mount_default, mount_nullfs=mount_nullfs_default, kldload=kldload_default, chroot=chroot_default):
+def chroot(base_dir, shell=shell_default, config_dir_path=config_dir_path_default, host_type=host_type_default, mount=mount_default, mount_nullfs=mount_nullfs_default, kldload=kldload_default, chroot=chroot_default, debug=False):
     """Performs the necessary preparations for starting the chroot located in `base_dir` if and only if the script is invoked the first time with the value of `base_dir` and `host_type`, starts the chroot for `base_dir` and stores a reference (in form of `base_dir`, `host_type` and the pid of the chroot shell) in a line in the file denoted by `count_file_path`. Creates the file denoted by `count_file_path` if it doesn't exist. `host_type` allows to leave some fundamental differences between hosts to the script. `base_dir` must not contain %s. It is possible to manage different host types for the same base directory (that might make sense one day or maybe even already). The chroot (shell) runs in foreground and the script can be invoked multiple times.""" % (count_file_separator, )
-    if count_file_separator in count_file_path:
+    # it's more elegant to let the use only determine one of configuration directory and count file and due to the the fact that count file is in configuration directory it is better to let him_her choose the configuration directory. The configuration directory can't be static because that get's us in trouble whit sudo and read-only roots (e.g. in FreeBSD jails).
+    if debug is True:
+        logger.info("turning on debugging messages")
+        logger.setLevel(logging.DEBUG)
+        ch.setLevel(logging.DEBUG)
+    if count_file_separator in config_dir_path:
         # `base_dir` might be wrapped in a delimiter character when writting into the count file, but this appears to be overhead in implementation because there're few directories with `;` in it -> if that ever becomes an issue store values in a persistent map with shelve
         raise ValueError("character %s not allowed in base_dir argument" % (count_file_separator, ))
+    # don't create 
     if not os.path.exists(config_dir_path):
         logger.debug("creating config directory '%s'" % (config_dir_path, ))
         os.makedirs(config_dir_path)
     elif not os.path.isdir(config_dir_path):
         raise ValueError("config directory '%s' is not a directory" % (config_dir_path, ))
+    count_file_path=os.path.join(config_dir_path, count_file_name)
     if not os.path.exists(count_file_path):
         logger.debug("creating count file '%s'" % (count_file_path, ))
-        os.mknod(count_file_path, 755)
+        with open(count_file_path, "w"):
+            pass
     if os.path.isdir(count_file_path):
+        # might have been changed externally
         raise ValueError("count file '%s' is a directory" % (count_file_path, ))
+    base_dir_new = os.path.realpath(base_dir)
+    if base_dir_new != base_dir:
+        logger.debug("using absolute directory '%s' as base directory" % (base_dir_new, ))
+        base_dir = base_dir_new
     if host_type == HOST_TYPE_FREEBSD:
         sp.call([kldload, "fdescfs", "linprocfs", "linsysfs", "tmpfs"]) # fails if one of the modules is already loaded, loads all necessary modules
     # check whether eventually mounted outside the script:
-    pids = retrieve_pids(base_dir, host_type, count_file_path)
+    pids = retrieve_pids(base_dir=base_dir, host_type=host_type, count_file_path=count_file_path)
     if len(pids) > 0:
         logger.info("mounts already set up for base directory '%s' and host type '%s'" % (base_dir, host_type, ))
     else:
-        chroot_start(base_dir=base_dir, host_type=host_type)
+        chroot_start(base_dir=base_dir, host_type=host_type, mount=mount)
     chroot_process = sp.Popen([chroot, base_dir, shell])
     pid = chroot_process.pid
     with open(count_file_path, "w") as count_file:
@@ -93,8 +117,10 @@ def chroot(base_dir, shell=shell_default, count_file_path=count_file_path_defaul
         count_file.write("%s\n" % (count_file_entry, ))
     logger.debug("adding entry '%s' to count file '%s'" % (count_file_entry, count_file_path, ))     
     chroot_process.wait() 
+    if chroot_process.returncode != 0:
+        raise RuntimeError("chroot process failed and returned with returncode %d" % (chroot_process.returncode, ))
 
-def chroot_start(base_dir, host_type):
+def chroot_start(base_dir, host_type, mount=mount_default):
     proc = "/proc"
     sys = "/sys"
     devpts = "/dev/pts"
@@ -105,56 +131,75 @@ def chroot_start(base_dir, host_type):
     dev_mount_target = os.path.join(base_dir, "dev")
     devpts_mount_target = os.path.join(base_dir, "dev/pts")
     if host_type == HOST_TYPE_DEBIAN:
-        mount_utils.lazy_mount(proc, proc_mount_target, "proc")
-        mount_utils.lazy_mount(sys, sys_mount_target, "sysfs")
-        mount_utils.lazy_mount("/dev", dev_mount_target, fs_type=None, options_str="bind")
-        mount_utils.lazy_mount("/dev/pts", devpts_mount_target, "devpts")
+        mount_utils.lazy_mount(proc, proc_mount_target, "proc", mount=mount)
+        sp.check_call([mount, "-t", "sysfs", sys, sys_mount_target])
+            # mount_utils.lazy_mount doesn't work because os.makedirs fails with 
+            # OSError "file exists" although it doesn't
+        mount_utils.lazy_mount("/dev", dev_mount_target, fs_type=None, options_str="bind", mount=mount)
+        mount_utils.lazy_mount("/dev/pts", devpts_mount_target, "devpts", mount=mount)
     elif host_type == HOST_TYPE_FREEBSD:
-        mount_utils.lazy_mount("none", proc_mount_target, "linprocfs")
-        mount_utils.lazy_mount("none", # <ref>https://forums.freebsd.org/threads/install-debian-gnu-linux-using-debootstrap-on-a-freebsd-jail-with-zfs.41470/</ref>
-            dev_mount_target, "devfs")
-        mount_utils.lazy_mount("none", sys_mount_target, "linsysfs")
-        mount_utils.lazy_mount("none", os.path.join(base_dir, "lib/init/rw", "tmpfs"))
+        mount_utils.lazy_mount("none", proc_mount_target, "linprocfs", mount=mount)
+        mount_utils.lazy_mount("devfs", dev_mount_target, "devfs", mount=mount)
+            # both `mount_nullfs /dev/ dev_mount_target` and `mount -t devfs none dev_mount_target` succeed, but don't initialize /dev/urandom (when read with cat; ssl fails as well)
+        mount_utils.lazy_mount("none", sys_mount_target, "linsysfs", mount=mount)
+        mount_utils.lazy_mount("none", os.path.join(base_dir, "lib/init/rw"), "tmpfs", mount=mount)
     else:
         raise ValueError("host_type '%s' not supported" % (str(host_type), ))
     logger.info("setup mount points for base directory '%s' and host type '%s'" % (base_dir, host_type, ))
+    logger.info("copying /etc/resolv.conf into base directory '%s'" % (base_dir, ))
+    resolv_target_path = os.path.join(base_dir, "etc", "resolv.conf")
+    os.remove(resolv_target_path) # script leaves a broken link (either python 2.7.8 or Linux 3.16.0 or something else or everything doesn't work)
+    if not os.path.exists(os.path.dirname(resolv_target_path)):
+        os.makedirs(os.path.dirname(resolv_target_path))
+    shutil.copyfile("/etc/resolv.conf", resolv_target_path)
 
-def chroot_shutdown(count_file_path=count_file_path_default, umount=umount_default):
-    """Reads the PIDs of all started instances from `count_file_path` which is expected to be created by `chroot`, terminates them and then frees the resources, i.e. unmounts the (virtual) filesystems and directories which have been mounted in `chroot`. Returns `0` on success and `1` if `count_file_path` doesn't exist."""
+def chroot_shutdown(base_dir=None, host_type=None, config_dir_path=config_dir_path_default, umount=umount_default, debug=False):
+    """Reads the PIDs of all started instances from `config_dir_path/count_file_name` which is expected to be created by `chroot`, terminates them and then frees the resources, i.e. unmounts the (virtual) filesystems and directories which have been mounted in `chroot`. Returns `0` on success and `1` if `config_dir_path/count_file_name` doesn't exist."""
     # internal implementation notes:
     # - should be parameterless because this makes wrapping the function as easy as possible (see script comment as well)
+    if debug is True:
+        logger.info("turning on debugging messages")
+        logger.setLevel(logging.DEBUG)
+        ch.setLevel(logging.DEBUG)
+    count_file_path=os.path.join(config_dir_path, count_file_name)
     if not os.path.exists(count_file_path):
         logger.info("count file '%s' doesn't exist, canceling shutdown" % (count_file_path, ))
         return 0
     base_dir_dict = retrieve_pids_dict(count_file_path)
-    for base_dir in base_dir_dict:
-        proc_mount_target = os.path.join(base_dir, "proc")
-        sys_mount_target = os.path.join(base_dir, "sys")
-        dev_mount_target = os.path.join(base_dir, "dev")
-        devpts_mount_target = os.path.join(base_dir, "dev/pts")
-        host_type_dict = base_dir_dict[base_dir]
+    if len(base_dir_dict) == 0:
+        logger.info("count file '%s' is empty" % (count_file_path, ))
+    for base_dir0 in base_dir_dict:
+        if base_dir != None and base_dir0 != base_dir:
+            continue
+        proc_mount_target = os.path.join(base_dir0, "proc")
+        sys_mount_target = os.path.join(base_dir0, "sys")
+        dev_mount_target = os.path.join(base_dir0, "dev")
+        devpts_mount_target = os.path.join(base_dir0, "dev/pts")
+        host_type_dict = base_dir_dict[base_dir0]
         if len(host_type_dict) > 0:            
-            for host_type in host_type_dict:
-                for pid in host_type_dict[host_type]:
+            for host_type0 in host_type_dict:
+                if host_type != None and host_type0 != host_type:
+                    continue
+                for pid in host_type_dict[host_type0]:
                     try:
                         os.kill(pid, signal.SIGTERM)
                     except OSError:
                         # a real error occured or the process no longer exists (an entry doesn't denote a running chroot session, but the possibility that the mounts need to be unmounted), but in case this is called at system shutdown we really need to kill
                         pass
                 # everything killed -> free resources
-                if host_type == HOST_TYPE_DEBIAN:
+                if host_type0 == HOST_TYPE_DEBIAN:
                     sp.call([umount, devpts_mount_target]) # before dev_mount_target
                     sp.call([umount, dev_mount_target])
                     sp.call([umount, sys_mount_target])
                     sp.call([umount, proc_mount_target])
-                elif host_type == HOST_TYPE_FREEBSD:
+                elif host_type0 == HOST_TYPE_FREEBSD:
                     sp.call([umount, dev_mount_target])
                     sp.call([umount, sys_mount_target])
                     sp.call([umount, proc_mount_target])
-                    sp.call([umount, os.path.join(base_dir, "lib/init/rw")])
+                    sp.call([umount, os.path.join(base_dir0, "lib/init/rw")])
                 else:
-                    raise ValueError("host_type '%s' not supported (count file '%s' corrupted)" % (host_type, count_file_path, ))
-                logger.info("umounted chroot mounts for base directory '%s' and host type '%s'" % (base_dir, host_type, ))
+                    raise ValueError("host_type '%s' not supported (count file '%s' corrupted)" % (host_type0, count_file_path, ))
+                logger.info("umounted chroot mounts for base directory '%s' and host type '%s'" % (base_dir0, host_type0, ))
 
 def retrieve_pids_dict(count_file_path):
     base_dir_dict = dict()

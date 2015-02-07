@@ -30,9 +30,17 @@
 # a simple wrapper around the `chroot_shutdown` function in `chroot.py` which can be called from an initd or upstart script (or something similar) with the necessary privileges
 
 import chroot
+import plac
 
-def chroot_shutdown():
-    chroot.chroot_shutdown()
+@plac.annotations(
+    base_dir=("Only shutdown all resources based on `base_dir`. Effect depends on `host_type`. `None` means all.", "positional"), 
+    host_type=("Only shutdown all resources with `host_type`. Effect depends on `base_dir`. `None` means all.", "positional"), 
+    config_dir_path=(chroot.__docstring_config_dir_path__, "option"), 
+    umount=("The umount binary to use", "option"), 
+    debug=(chroot.__docstring_debug__, "flag"), 
+)    
+def chroot_shutdown(base_dir=None, host_type=None, config_dir_path=chroot.config_dir_path_default, umount=chroot.umount_default, debug=False):
+    chroot.chroot_shutdown(config_dir_path=config_dir_path, umount=umount, debug=debug)
 
 if __name__ == "__main__":
-    chroot_shutdown()
+    plac.call(chroot_shutdown)
