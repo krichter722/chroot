@@ -93,8 +93,7 @@ def chroot(base_dir, shell=shell_default, config_dir_path=config_dir_path_defaul
     count_file_path=os.path.join(config_dir_path, count_file_name)
     if not os.path.exists(count_file_path):
         logger.debug("creating count file '%s'" % (count_file_path, ))
-        with open(count_file_path, "w"):
-            pass
+        os.mknod(count_file_path, 0o0755)
     if os.path.isdir(count_file_path):
         # might have been changed externally
         raise ValueError("count file '%s' is a directory" % (count_file_path, ))
