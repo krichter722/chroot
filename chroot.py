@@ -42,6 +42,7 @@ import subprocess as sp
 import sys
 import shutil
 import shelve
+from bsddb import dbshelve as shelve
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -120,10 +121,10 @@ def chroot(base_dir, shell=shell_default, config_dir_path=config_dir_path_defaul
     base_dir_dict = count_file_dict[base_dir]
     if not host_type in base_dir_dict:
         base_dir_dict[host_type] = set()
-    base_dir_dict[host_type].add(pid)
-    base_dir_dict.close()
     count_file_entry = "%s%s%s%s%s" % (base_dir, count_file_separator, pid, count_file_separator, host_type, )
     logger.debug("adding entry '%s' to count file '%s'" % (count_file_entry, count_file_path, ))     
+    base_dir_dict[host_type].add(pid)
+    base_dir_dict.close()
     chroot_process.wait() 
     if chroot_process.returncode != 0:
         raise RuntimeError("chroot process failed and returned with returncode %d" % (chroot_process.returncode, ))
@@ -209,6 +210,7 @@ def chroot_shutdown(base_dir=None, host_type=None, config_dir_path=config_dir_pa
                     raise ValueError("host_type '%s' not supported (count file '%s' corrupted)" % (host_type0, count_file_path, ))
                 logger.info("umounted chroot mounts for base directory '%s' and host type '%s'" % (base_dir0, host_type0, ))
                 host_type_dict.pop(host_type0)
+    base_dir_dict.close()
 
 def retrieve_pids(base_dir, host_type, count_file_path):
     """Retrieves a list of pids of chroot session currently started for `host_type` or an empty list if no pids are managed for that type."""
@@ -217,7 +219,9 @@ def retrieve_pids(base_dir, host_type, count_file_path):
         return []
     if not host_type in base_dir_dict[base_dir]:
         return []
-    return base_dir_dict[base_dir][host_type]
+    ret_value = base_dir_dict[base_dir][host_type]
+    base_dir_dict.close()
+    return ret_value
 
 if __name__ == "__main__":
     plac.call(chroot)
