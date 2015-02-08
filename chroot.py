@@ -116,7 +116,7 @@ def chroot(base_dir, shell=shell_default, config_dir_path=config_dir_path_defaul
     chroot_process = sp.Popen([chroot, base_dir, shell])
     pid = chroot_process.pid
     count_file_dbm = dumbdbm.open(count_file_path) # pass an instance of a key-value-store opened outside of shelve in order to work around http://bugs.python.org/issue23174
-    count_file_dict = shelve.Shelve(dict=count_file_dbm)
+    count_file_dict = shelve.Shelf(dict=count_file_dbm)
     if not base_dir in count_file_dict:
         count_file_dict[base_dir]= dict()
     base_dir_dict = count_file_dict[base_dir]
@@ -176,7 +176,7 @@ def chroot_shutdown(base_dir=None, host_type=None, config_dir_path=config_dir_pa
         logger.info("count file '%s' doesn't exist, canceling shutdown" % (count_file_path, ))
         return 0
     count_file_dbm = dumbdbm.open(count_file_path)
-    base_dir_dict = shelve.Shelve(dict=count_file_dbm)
+    base_dir_dict = shelve.Shelf(dict=count_file_dbm)
     if len(base_dir_dict) == 0:
         logger.info("count file '%s' is empty" % (count_file_path, ))
     for base_dir0, base_dir_dict0 in base_dir_dict.items():
@@ -217,7 +217,7 @@ def chroot_shutdown(base_dir=None, host_type=None, config_dir_path=config_dir_pa
 def retrieve_pids(base_dir, host_type, count_file_path):
     """Retrieves a list of pids of chroot session currently started for `host_type` or an empty list if no pids are managed for that type."""
     count_file_dbm = dumbdbm.open(count_file_path)
-    base_dir_dict = shelve.Shelve(dict=count_file_dbm)
+    base_dir_dict = shelve.Shelf(dict=count_file_dbm)
     if not base_dir in base_dir_dict:
         return []
     if not host_type in base_dir_dict[base_dir]:
