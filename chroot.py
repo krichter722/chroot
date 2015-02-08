@@ -125,7 +125,7 @@ def chroot(base_dir, shell=shell_default, config_dir_path=config_dir_path_defaul
     count_file_entry = "%s%s%s%s%s" % (base_dir, count_file_separator, pid, count_file_separator, host_type, )
     logger.debug("adding entry '%s' to count file '%s'" % (count_file_entry, count_file_path, ))     
     base_dir_dict[host_type].add(pid)
-    base_dir_dict.close()
+    count_file_dict.close()
     chroot_process.wait() 
     if chroot_process.returncode != 0:
         raise RuntimeError("chroot process failed and returned with returncode %d" % (chroot_process.returncode, ))
@@ -176,17 +176,17 @@ def chroot_shutdown(base_dir=None, host_type=None, config_dir_path=config_dir_pa
         logger.info("count file '%s' doesn't exist, canceling shutdown" % (count_file_path, ))
         return 0
     count_file_dbm = dumbdbm.open(count_file_path)
-    base_dir_dict = shelve.Shelf(dict=count_file_dbm)
-    if len(base_dir_dict) == 0:
+    count_file_dict = shelve.Shelf(dict=count_file_dbm)
+    if len(count_file_dict) == 0:
         logger.info("count file '%s' is empty" % (count_file_path, ))
-    for base_dir0, base_dir_dict0 in base_dir_dict.items():
+    for base_dir0, base_dir_dict in count_file_dict.items():
         if base_dir != None and base_dir0 != base_dir:
             continue
         proc_mount_target = os.path.join(base_dir0, "proc")
         sys_mount_target = os.path.join(base_dir0, "sys")
         dev_mount_target = os.path.join(base_dir0, "dev")
         devpts_mount_target = os.path.join(base_dir0, "dev/pts")
-        host_type_dict = base_dir_dict0[base_dir0]
+        host_type_dict = base_dir_dict[base_dir0]
         if len(host_type_dict) > 0:            
             for host_type0, pids in host_type_dict.items():
                 if host_type != None and host_type0 != host_type:
@@ -212,18 +212,18 @@ def chroot_shutdown(base_dir=None, host_type=None, config_dir_path=config_dir_pa
                     raise ValueError("host_type '%s' not supported (count file '%s' corrupted)" % (host_type0, count_file_path, ))
                 logger.info("umounted chroot mounts for base directory '%s' and host type '%s'" % (base_dir0, host_type0, ))
                 host_type_dict.pop(host_type0)
-    base_dir_dict.close()
+    count_file_dict.close()
 
 def retrieve_pids(base_dir, host_type, count_file_path):
     """Retrieves a list of pids of chroot session currently started for `host_type` or an empty list if no pids are managed for that type."""
     count_file_dbm = dumbdbm.open(count_file_path)
-    base_dir_dict = shelve.Shelf(dict=count_file_dbm)
-    if not base_dir in base_dir_dict:
+    count_file_dict = shelve.Shelf(dict=count_file_dbm)
+    if not base_dir in count_file_dict:
         return []
-    if not host_type in base_dir_dict[base_dir]:
+    if not host_type in count_file_dict[base_dir]:
         return []
-    ret_value = base_dir_dict[base_dir][host_type]
-    base_dir_dict.close()
+    ret_value = count_file_dict[base_dir][host_type]
+    count_file_dict.close()
     return ret_value
 
 if __name__ == "__main__":
