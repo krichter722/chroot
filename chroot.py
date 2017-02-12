@@ -105,6 +105,8 @@ def chroot(base_dir, shell=shell_default, config_dir_path=config_dir_path_defaul
     if base_dir_new != base_dir:
         logger.debug("using absolute directory '%s' as base directory" % (base_dir_new, ))
         base_dir = base_dir_new
+    if not os.path.exists(base_dir):
+        raise ValueError("base directory '%s' doesn't exist" % (base_dir, ))
     if host_type == HOST_TYPE_FREEBSD:
         sp.call([kldload, "fdescfs", "linprocfs", "linsysfs", "tmpfs"]) # fails if one of the modules is already loaded, loads all necessary modules
     # check whether eventually mounted outside the script:
