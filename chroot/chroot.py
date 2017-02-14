@@ -228,5 +228,9 @@ def retrieve_pids(base_dir, host_type, count_file_path):
     count_file_dict.close()
     return ret_value
 
-if __name__ == "__main__":
+def main():
+    """entry point for setuptools"""
     plac.call(chroot)
+
+if __name__ == "__main__":
+    main()

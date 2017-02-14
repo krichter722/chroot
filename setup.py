@@ -33,9 +33,14 @@ from setuptools import setup, find_packages
 setup(
     name = chroot_globals.app_name,
     version = chroot_globals.app_version_string,
-    packages = ["."],
-    install_requires = ["plac >= 0.9.1", "python-essentials", ], 
-    
+    packages = find_packages(),
+    install_requires = ["plac >= 0.9.1", "python-essentials", ],
+    entry_points={
+        'console_scripts': [
+            'mychroot = chroot.chroot:main',
+        ],
+    },
+
     # metadata for upload to PyPI
     author = chroot_globals.app_author,
     author_email = chroot_globals.app_author_email,
